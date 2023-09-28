@@ -172,7 +172,7 @@ if __name__ == "__main__":
     _url = "https://www.tesla.com/inventory/new/my?TRIM=LRAWD&arrangeby=plh&zip=07065&range=0"
     _app_email = os.environ["SMTP_USER_EMAIL"]
     _app_password = os.environ["SMTP_USER_PASSWORD"]
-    _target_emails = [email_id.strip() for email_id in open("../resources/mailing_list.txt") if email_id.strip()]
+    _target_emails = [email_id.strip() for email_id in open("resources/mailing_list.txt") if email_id.strip()]
     _max_results = 3
     _watcher = TeslaWatcher(
         url=_url,
