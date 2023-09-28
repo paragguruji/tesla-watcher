@@ -132,6 +132,12 @@ venv.bak/
 .spyderproject
 .spyproject
 
+# Pycharm project settings
+.idea/
+
+# Mac folder
+.DS_Store
+
 # Rope project settings
 .ropeproject
 
