@@ -4,8 +4,10 @@ import re
 import shutil
 import smtplib
 import ssl
+import sys
 import time
-from typing import List, Optional
+from types import TracebackType
+from typing import List, Optional, Dict, Callable, Tuple, Type
 
 from bs4 import BeautifulSoup, element
 from selenium import webdriver
@@ -21,17 +23,24 @@ PRICE_ADJUSTMENT = sum(v for v in dict(
     REFERRAL=-500
 ).values())
 
+WSGI_START_RESPONSE_TYPEDEF = Callable[
+    [str,
+     List[Tuple[str, str]],
+     Optional[tuple[Type[BaseException], BaseException, TracebackType] | tuple[None, None, None]]],
+    Callable[[bytes], None]
+]
 
-class TeslaWatcher:
-    def __init__(self, url, timeout_sec, app_email, app_password, target_emails, max_results):
+
+class TeslaWatcher(object):
+    def __init__(self, url: str, timeout_sec: int, app_email: str, app_password: str, emails: List[str], limit: int):
         self._url = url
         self._timeout_sec = timeout_sec
         self._app_email = app_email
         self._app_password = app_password
-        self._target_emails = target_emails
-        self._max_results = max_results
+        self._target_emails = emails
+        self._limit = limit
 
-    def fetch(self):
+    def fetch(self) -> str:
         url = self._url
         timeout_sec = self._timeout_sec
         web_driver = None
@@ -53,14 +62,14 @@ class TeslaWatcher:
             web_driver.get(url)
             return web_driver.page_source
         except Exception as e:
-            print(f"Error fetching inventory from: {url} \n Error: {e}")
+            raise IOError(f"Error fetching inventory: URL={url}") from e
         finally:
             if web_driver is not None:
                 web_driver.quit()
             shutil.rmtree("./tmp")
 
-    def extract(self, inventory_html: Optional[str]):
-        def parse_one(car_html: element.Tag):
+    def extract(self, inventory_html: Optional[str]) -> Tuple[List[List[str]], int]:
+        def parse_one(car_html: element.Tag) -> List[str]:
             name = (
                 car_html
                 .select_one("section.result-header")
@@ -81,26 +90,32 @@ class TeslaWatcher:
                 (item.select_one("div.tds-text--caption").select_one("span").text + ": " +
                  item.select_one("div").select_one("span.tds-text--h4").text +
                  item.select_one("div").find(name="span", attrs={"class": ""}).text
-                )
+                 )
                 for item in car_html
                 .select_one("section.result-highlights-cta")
                 .select_one("div.result-highlights")
                 .select_one("ul.highlights-list")
                 .select("li")
             ]
-            unnamed_features = [_.text for _ in (
+            unnamed_features = [_.text.replace("’", "'") for _ in (
                 car_html
                 .select_one("section.result-features.features-grid")
                 .select_one("ul.result-regular-features")
                 .select("li.tds-list-item")
             )]
             price = float(re.sub(r"[^0-9.]", "", price))
-            cost = price + PRICE_ADJUSTMENT
-            return "\n\t".join([f"[${price:,.2f} => ${cost:,.2f}]", name] + named_features + unnamed_features)
+            return (
+                [f"[${price:,.2f} => ${(price + PRICE_ADJUSTMENT):,.2f}]"] +
+                [f"  {v}" for v in [name] + named_features + unnamed_features] +
+                [""]
+            )
 
         if inventory_html is None:
             inventory_html = ""
         url = self._url
+        limit = self._limit
+        results = []
+        found = 0
         try:
             cars = (
                 BeautifulSoup(markup=inventory_html, features="html.parser")
@@ -111,51 +126,53 @@ class TeslaWatcher:
                 .find_all(name="article", attrs={"class": "result card"})
             )
         except Exception as e:
-            print(f"Error parsing inventory: {e}\nContentLength={len(inventory_html)}\nURL={url}")
+            raise RuntimeError(f"Error parsing inventory: ContentLength={len(inventory_html)} URL={url}") from e
         else:
-            results = []
-            for idx, car in enumerate(cars):
+            found = len(cars)
+            for idx, car in enumerate(cars, start=1):
+                if idx > limit:
+                    break
                 try:
                     results.append(parse_one(car))
                 except Exception as e:
-                    print(f"Error parsing car #{idx + 1}/{len(cars)}: {e}\nResultCardHTML=\n{car}\nURL={url}")
-            return results
+                    raise RuntimeError(f"Error parsing Car #{idx}/{len(cars)}: URL={url} HTML={car}") from e
+        return results, found
 
-    def notify(self, results: Optional[List[str]]):
-        def print_banner():
-            header = ["", f"From: <{sender}>", "To: " + ",".join([f"<{r}>" for r in recipients]), subject_line, ""]
-            body = [""] + content_lines + [""]
-            width = (10 + max(map(len, header + content_lines)))
-            print("\n".join(
+    def notify(self, top_results: List[List[str]], total_results: int) -> str:
+
+        def make_banner(from_email: str, to_emails: List[str], subject: str, content: List[str]) -> str:
+            header = [f"From: <{from_email}>", "To: " + ",".join([f"<{r}>" for r in to_emails]), subject]
+            width = (10 + max(map(len, header + content)))
+            return ("\n".join(
                 ["+" + "=" * width + "+"] +
                 ["|" + line + (" " * (width - len(line))) + "|" for line in header] +
                 ["+" + "-" * width + "+"] +
-                ["|" + line + (" " * (width - len(line))) + "|" for line in body] +
+                ["|" + line + (" " * (width - len(line))) + "|" for line in content] +
                 ["+" + "=" * width + "+"]
             ))
 
-        if results is None:
-            return False
         url = self._url
         sender = self._app_email
         password = self._app_password
         recipients = self._target_emails
-        limit = self._max_results
         subject_line = "Subject: Tesla @ [{}]".format(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
-        content_lines = [f"Top {min(limit, len(results))}/{len(results)} matches ({url}):"] + results[:limit]
-        print_banner()
+        content_lines = (
+            [f"Top {len(top_results)}/{total_results} matches ({url}):", ""] +
+            [line for result in top_results for line in result]
+        )
+        banner = make_banner(sender, recipients, subject_line, content_lines)
+        email_message = "\n".join([subject_line] + content_lines)
         if recipients:
             try:
                 with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as server:
                     server.login(sender, password)
-                    server.sendmail(sender, recipients, "\n\n".join([subject_line] + content_lines).encode("utf-8"))
+                    server.sendmail(sender, recipients, email_message.encode("utf-8"))
             except Exception as e:
-                print(f"Error notifying results: {e}")
-                return False
-        return True
+                raise IOError(f"Error notifying results: Results={banner}") from e
+        return banner
 
-    def run(self):
-        return self.notify(self.extract(self.fetch()))
+    def run(self) -> str:
+        return self.notify(*self.extract(self.fetch()))
 
 
 def local_main(tesla_watcher: TeslaWatcher, interval_sec: int):
@@ -166,12 +183,14 @@ def local_main(tesla_watcher: TeslaWatcher, interval_sec: int):
         done = tesla_watcher.run()
 
 
-if __name__ == "__main__":
+def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
+    overridden_environ = os.environ.copy()
+    overridden_environ.update(environ)
     _interval_sec = 60 * 60
     _timeout_sec = 60
     _url = "https://www.tesla.com/inventory/new/my?TRIM=LRAWD&arrangeby=plh&zip=07065&range=0"
-    _app_email = os.environ["SMTP_USER_EMAIL"]
-    _app_password = os.environ["SMTP_USER_PASSWORD"]
+    _app_email = overridden_environ["SMTP_USER_EMAIL"]
+    _app_password = overridden_environ["SMTP_USER_PASSWORD"]
     _target_emails = [email_id.strip() for email_id in open("resources/mailing_list.txt") if email_id.strip()]
     _max_results = 3
     _watcher = TeslaWatcher(
@@ -179,8 +198,23 @@ if __name__ == "__main__":
         timeout_sec=_timeout_sec,
         app_email=_app_email,
         app_password=_app_password,
-        target_emails=_target_emails,
-        max_results=_max_results
+        emails=_target_emails,
+        limit=_max_results
     )
-    _watcher.run()
-    # local_main(_watcher, _interval_sec)
+    status = "200 OK"
+    data = f"{_watcher.run()}"
+    response_headers = [
+        ("Content-type", "text/plain"),
+        ("Content-Length", str(len(data)))
+    ]
+    exc_info = sys.exc_info()
+    if all(e is None for e in exc_info):
+        exc_info = None
+    start_response(status, response_headers, exc_info)
+    return iter([data.encode("utf-8")])
+
+
+if __name__ == "__main__":
+    response = app(dict(), lambda x, y, z: lambda w: print(w))
+    for out_line in response:
+        print(out_line.decode('utf-8'))
