@@ -1,7 +1,7 @@
 import datetime
 import os
 import re
-import shutil
+# import shutil
 import smtplib
 import ssl
 import sys
@@ -49,7 +49,7 @@ class TeslaWatcher(object):
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-browser-side-navigation")
-            chrome_options.add_argument(f"--user-data-dir=./tmp")
+            # chrome_options.add_argument(f"--user-data-dir=./tmp")
             chrome_options.add_argument("--ignore-certificate-errors")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-extensions")
@@ -66,7 +66,7 @@ class TeslaWatcher(object):
         finally:
             if web_driver is not None:
                 web_driver.quit()
-            shutil.rmtree("./tmp")
+            # shutil.rmtree("./tmp")
 
     def extract(self, inventory_html: Optional[str]) -> Tuple[List[List[str]], int]:
         def parse_one(car_html: element.Tag) -> List[str]:
