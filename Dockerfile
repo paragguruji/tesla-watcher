@@ -3,8 +3,8 @@ FROM gcr.io/google-appengine/python
 USER root
 RUN apt-get update
 
-wget http://archive.ubuntu.com/ubuntu/pool/main/libu/libu2f-host/libu2f-udev_1.1.4-1_all.deb
-dpkg -i libu2f-udev_1.1.4-1_all.deb
+RUN wget http://archive.ubuntu.com/ubuntu/pool/main/libu/libu2f-host/libu2f-udev_1.1.4-1_all.deb
+RUN dpkg -i libu2f-udev_1.1.4-1_all.deb
 
 RUN apt-get install -y wget  \
     gconf-service  \
