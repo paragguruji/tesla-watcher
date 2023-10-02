@@ -114,8 +114,6 @@ class TeslaWatcher(object):
             html = ""
         url = self._url
         limit = self._limit
-        results = []
-        found = 0
         try:
             cars = (
                 BeautifulSoup(markup=html, features="html.parser")
@@ -128,6 +126,7 @@ class TeslaWatcher(object):
         except Exception as e:
             raise RuntimeError(f"Error parsing inventory: ContentLength={len(html)} URL={url} head={html[:500]}") from e
         else:
+            results = []
             found = len(cars)
             for idx, car in enumerate(cars, start=1):
                 if idx > limit:
