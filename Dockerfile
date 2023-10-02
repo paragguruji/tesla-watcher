@@ -3,7 +3,7 @@ FROM python:3.11
 USER root
 RUN apt-get update
 RUN apt-get install -f
-RUN apt-get install -y chromium
+RUN apt-get install -y chromium virtualenv
 
 #RUN wget http://archive.ubuntu.com/ubuntu/pool/main/libu/libu2f-host/libu2f-udev_1.1.4-1_all.deb
 #RUN dpkg -i libu2f-udev_1.1.4-1_all.deb
