@@ -202,13 +202,16 @@ class TeslaWatcher(object):
 
     def run(self) -> str:
         attempt = 0
-        while attempt < MAX_ATTEMPTS:
+        while True:
             attempt += 1
             try:
                 return self.notify(*self.extract(self.fetch()))
             except Exception as e:
-                print(f"Failed Attempt #{attempt}: Error={repr(e)}")
-                backoff_random()
+                if attempt < MAX_ATTEMPTS:
+                    print(f"Failed Attempt #{attempt}: Error={repr(e)}")
+                    backoff_random()
+                else:
+                    raise e
 
 
 def local_main(tesla_watcher: TeslaWatcher, interval_sec: int):
