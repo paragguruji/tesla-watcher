@@ -46,4 +46,4 @@ COPY ./resources $APP_HOME/resources
 
 USER cnb
 
-ENTRYPOINT ["python", "-m", "src/main.py"]
+ENTRYPOINT ["python", "-m", "src.main"]
