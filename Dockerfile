@@ -2,6 +2,7 @@ FROM python:3.11
 
 USER root
 RUN apt-get install -f
+RUN apt-get update
 RUN apt-get install -y virtualenv
 
 # RUN apt-get install -y chromium
