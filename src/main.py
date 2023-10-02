@@ -171,7 +171,13 @@ class TeslaWatcher(object):
         return banner
 
     def run(self) -> str:
-        return self.notify(*self.extract(self.fetch()))
+        attempt = 0
+        while attempt < 5:
+            attempt += 1
+            try:
+                return self.notify(*self.extract(self.fetch()))
+            except Exception as e:
+                print(f"Failed Attempt #{attempt}: Error={repr(e)}")
 
 
 def local_main(tesla_watcher: TeslaWatcher, interval_sec: int):
