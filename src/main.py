@@ -68,7 +68,7 @@ class TeslaWatcher(object):
                 web_driver.quit()
             # shutil.rmtree("./tmp")
 
-    def extract(self, inventory_html: Optional[str]) -> Tuple[List[List[str]], int]:
+    def extract(self, html: Optional[str]) -> Tuple[List[List[str]], int]:
         def parse_one(car_html: element.Tag) -> List[str]:
             name = (
                 car_html
@@ -110,15 +110,15 @@ class TeslaWatcher(object):
                 [""]
             )
 
-        if inventory_html is None:
-            inventory_html = ""
+        if html is None:
+            html = ""
         url = self._url
         limit = self._limit
         results = []
         found = 0
         try:
             cars = (
-                BeautifulSoup(markup=inventory_html, features="html.parser")
+                BeautifulSoup(markup=html, features="html.parser")
                 .find(name="body")
                 .find(name="div", attrs={"id": "iso-container"})
                 .find(name="main")
@@ -126,7 +126,7 @@ class TeslaWatcher(object):
                 .find_all(name="article", attrs={"class": "result card"})
             )
         except Exception as e:
-            raise RuntimeError(f"Error parsing inventory: ContentLength={len(inventory_html)} URL={url}") from e
+            raise RuntimeError(f"Error parsing inventory: ContentLength={len(html)} URL={url} head={html[:500]}") from e
         else:
             found = len(cars)
             for idx, car in enumerate(cars, start=1):
