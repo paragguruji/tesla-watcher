@@ -1,16 +1,18 @@
 import datetime
 import os
 import re
-# import shutil
 import smtplib
 import ssl
 import sys
 import time
+from random import randint
 from types import TracebackType
 from typing import List, Optional, Dict, Callable, Tuple, Type
 
 from bs4 import BeautifulSoup, element
 from selenium import webdriver
+
+EMPTY_WEBPAGE = "<html><head></head><body></body></html>"
 
 PRICE_ADJUSTMENT = sum(v for v in dict(
     DESTINATION_FEE=1390,
@@ -30,6 +32,12 @@ WSGI_START_RESPONSE_TYPEDEF = Callable[
     Callable[[bytes], None]
 ]
 
+MAX_ATTEMPTS = 5
+
+
+def backoff_random(_min=3, _max=9):
+    time.sleep(randint(3, 9))
+
 
 class TeslaWatcher(object):
     def __init__(self, url: str, timeout_sec: int, app_email: str, app_password: str, emails: List[str], limit: int):
@@ -39,34 +47,56 @@ class TeslaWatcher(object):
         self._app_password = app_password
         self._target_emails = emails
         self._limit = limit
+        chrome_options = webdriver.ChromeOptions()
+        # chrome_options.page_load_strategy = "normal"
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--disable-browser-side-navigation")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument(f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
+                                    f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.50 Safari/537.36")
+
+        chrome_options.add_argument("--disable-blink-features")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        self.chrome_options = chrome_options
+        self._web_driver = None
+
+    def reset_webdriver(self):
+        # noinspection PyBroadException
+        try:
+            self._web_driver.quit()
+        except Exception:
+            pass
+        finally:
+            self._web_driver = None
+
+    def init_webdriver(self):
+        try:
+            self._web_driver = webdriver.Chrome(options=self.chrome_options)
+        except Exception as e:
+            raise IOError(f"Error initializing webdriver for Chrome") from e
 
     def fetch(self) -> str:
         url = self._url
         timeout_sec = self._timeout_sec
-        web_driver = None
+        self.init_webdriver()
         try:
-            chrome_options = webdriver.ChromeOptions()
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--disable-browser-side-navigation")
-            # chrome_options.add_argument(f"--user-data-dir=./tmp")
-            chrome_options.add_argument("--ignore-certificate-errors")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument(f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
-                                        f"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.50 Safari/537.36")
-            chrome_options.page_load_strategy = "normal"
-            web_driver = webdriver.Chrome(options=chrome_options)
-            web_driver.set_page_load_timeout(timeout_sec)
-            web_driver.get(url)
-            return web_driver.page_source
+            self._web_driver.set_page_load_timeout(timeout_sec)
+            self._web_driver.get(url)
+            backoff_random()
+            page = self._web_driver.page_source
+            if EMPTY_WEBPAGE == page.strip():
+                raise IOError(f"Error fetching inventory: EMPTY RESPONSE: URL={url}")
+            return page
         except Exception as e:
             raise IOError(f"Error fetching inventory: URL={url}") from e
         finally:
-            if web_driver is not None:
-                web_driver.quit()
-            # shutil.rmtree("./tmp")
+            self.reset_webdriver()
 
     def extract(self, html: Optional[str]) -> Tuple[List[List[str]], int]:
         def parse_one(car_html: element.Tag) -> List[str]:
@@ -172,12 +202,13 @@ class TeslaWatcher(object):
 
     def run(self) -> str:
         attempt = 0
-        while attempt < 5:
+        while attempt < MAX_ATTEMPTS:
             attempt += 1
             try:
                 return self.notify(*self.extract(self.fetch()))
             except Exception as e:
                 print(f"Failed Attempt #{attempt}: Error={repr(e)}")
+                backoff_random()
 
 
 def local_main(tesla_watcher: TeslaWatcher, interval_sec: int):
