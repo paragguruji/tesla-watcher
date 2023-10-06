@@ -17,4 +17,4 @@ RUN pip install -r $APP_HOME/requirements.txt
 COPY ./resources $APP_HOME/resources
 COPY ./src $APP_HOME/src
 
-ENTRYPOINT ["gunicorn", "src.main:app", "--bind=0.0.0.0:8080", "--workers=2"]
+ENTRYPOINT ["gunicorn", "src.main:app", "--bind=:8080", "--workers=1"]
