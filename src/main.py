@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 import json
 import smtplib
 import ssl
@@ -7,6 +7,7 @@ import time
 from random import randint
 from typing import List, Dict, Tuple, Any
 
+import pytz
 import requests
 
 from src.configuration import PRICE_ADJUSTMENT, URL_PARAMS, API_URL, MAX_ATTEMPTS, HEADERS, SENDER, RECIPIENTS, \
@@ -14,7 +15,7 @@ from src.configuration import PRICE_ADJUSTMENT, URL_PARAMS, API_URL, MAX_ATTEMPT
 
 
 def backoff_random(_min=3, _max=9):
-    time.sleep(randint(3, 9))
+    time.sleep(randint(_min, _max))
 
 
 def make_banner(from_email: str, to_emails: List[str], subject: str, content: List[str]) -> str:
@@ -30,7 +31,8 @@ def make_banner(from_email: str, to_emails: List[str], subject: str, content: Li
 
 
 def notify(top_results: List[List[str]], total_results: int) -> str:
-    subject_line = "Subject: Tesla @ [{}]".format(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
+    timestamp = datetime.now(pytz.utc).astimezone(pytz.timezone('America/New_York')).strftime("%Y-%m-%dT%H:%M:%S")
+    subject_line = f"Subject: Tesla @ [{timestamp}]"
     content_lines = ([f"Top {len(top_results)}/{total_results} matches from {BROWSER_URL}:", ""] +
                      [line for result in top_results for line in result])
     banner = make_banner(SENDER, RECIPIENTS, subject_line, content_lines)
@@ -91,10 +93,10 @@ def never_stop():
     while True:
         try:
             print(run())
+            backoff_random(INTERVAL_SEC, INTERVAL_SEC)
         except Exception as e:
             print(f"All attempts failed: Error={repr(e)}")
             backoff_random()
-        backoff_random(INTERVAL_SEC, INTERVAL_SEC)
 
 
 def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
