@@ -59,7 +59,7 @@ def extract(page: dict[str, Any]) -> Tuple[List[List[str]], int]:
         for spec in car["OptionCodeSpecs"]["C_SPECS"]["options"]:
             car_lines.append(f'  {spec["description"]}: {spec["name"]}')
         for opt in car["OptionCodeSpecs"]["C_OPTS"]["options"]:
-            car_lines.append(f'  {opt["name"]}')
+            car_lines.append(f'  {opt["name"]}'.replace("’’", "''"))
         lines.append(car_lines)
     return lines, total
 
@@ -100,8 +100,6 @@ def never_stop():
 
 
 def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
-    if environ:
-        print(f"ENVIRON:\n{json.dumps(environ, indent=4)}")
     status = "200 OK"
     data = f"{run()}"
     response_headers = [
