@@ -115,8 +115,11 @@ def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
     return iter([data.encode("utf-8")])
 
 
+def simulate_wsgi_request():
+    response = app(dict(), lambda x, y, z: lambda w: print(w))
+    for out_line in response:
+        print(out_line.decode('utf-8'))
+
+
 if __name__ == "__main__":
-    # response = app(dict(), lambda x, y, z: lambda w: print(w))
-    # for out_line in response:
-    #     print(out_line.decode('utf-8'))
     never_stop()
