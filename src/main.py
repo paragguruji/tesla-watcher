@@ -87,7 +87,7 @@ def run():
                 raise e
 
 
-def local_main():
+def never_stop():
     while True:
         try:
             print(run())
@@ -114,6 +114,7 @@ def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
 
 
 if __name__ == "__main__":
-    response = app(dict(), lambda x, y, z: lambda w: print(w))
-    for out_line in response:
-        print(out_line.decode('utf-8'))
+    # response = app(dict(), lambda x, y, z: lambda w: print(w))
+    # for out_line in response:
+    #     print(out_line.decode('utf-8'))
+    never_stop()

@@ -14,6 +14,12 @@ PRICE_ADJUSTMENT = sum(v for v in dict(
     REFERRAL=-500
 ).values())
 
+MAX_ATTEMPTS = 5
+
+TIMEOUT_SEC = 60
+
+INTERVAL_SEC = 60 * 60 * 3
+
 BROWSER_URL = "https://www.tesla.com/inventory/new/my?TRIM=LRAWD&arrangeby=plh&zip=07065&range=0"
 
 API_URL = "https://www.tesla.com/inventory/api/v1/inventory-results"
@@ -66,12 +72,6 @@ URL_PARAMS = {
         separators=(",", ":")
     )
 }
-
-MAX_ATTEMPTS = 5
-
-TIMEOUT_SEC = 60
-
-INTERVAL_SEC = 60 * 60
 
 SENDER = os.environ["SMTP_USER_EMAIL"]
 
