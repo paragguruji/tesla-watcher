@@ -8,10 +8,11 @@ from src.teslawatcher import backoff_random, TeslaWatcher
 def repeat(run_count=-1, interval_seconds=(60 * 60 * 3)):
     remaining = run_count
     while remaining != 0:
+        if remaining != run_count:
+            backoff_random(interval_seconds, interval_seconds)
         remaining -= 1
         try:
             print(APP.run())
-            backoff_random(interval_seconds, interval_seconds)
         except Exception as e:
             print(f"All attempts failed: Error={repr(e)}")
             backoff_random()
