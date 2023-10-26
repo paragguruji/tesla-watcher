@@ -11,8 +11,9 @@ import pytz
 import requests
 
 from src.incentives import INCENTIVES
-from src.utils import enrich_address, COMMON_HEADERS, CSRF_REGEX, backoff_random, \
-    parse_recipients, TeslaSummary, ResultPage, gcp_download_text, gcp_upload_text
+from src.tesla_results import TeslaSummary, ResultPage
+from src.utils import enrich_address, COMMON_HEADERS, REGEX_CSRF, backoff_random, \
+    parse_recipients, gcp_download_text, gcp_upload_text
 
 GCP_BUCKET = "develop_pguruji_static_resources"
 GCP_PATH_MAILING_LIST = "tesla_watcher/mailing_list.txt"
@@ -195,9 +196,9 @@ class TeslaWatcher:
             print("WARNING: missing email user, password, or recipients - Will not notify results")
         if self.need_email:
             subject = results_page.subject + (f' - No Change ({prev[0].split("@")[1]})' if no_change else "")
-            self.smtp_send("EMAIL", self.email_recipients, subject, results_page.html_email)
+            self.smtp_send("EMAIL", self.email_recipients, subject, results_page.html_long_form)
         if self.need_sms and not no_change:
-            self.smtp_send("SMS", self.sms_recipients, results_page.subject, results_page.html_sms)
+            self.smtp_send("SMS", self.sms_recipients, results_page.subject, results_page.html_short_form)
         gcp_upload_text(path=self.last_results_path, content=results_page.plain_text)
 
     def order_identifiers(self, vin):
@@ -209,8 +210,7 @@ class TeslaWatcher:
         resp = requests.get(url=url, params=params, headers=headers, timeout=timeout)
         order_url = resp.url
         coin_auth = resp.cookies["coin_auth"]
-        csrf_name, csrf_value = (
-            re.match(CSRF_REGEX, resp.text, flags=(re.UNICODE | re.MULTILINE | re.DOTALL)).groups())
+        csrf_name, csrf_value = REGEX_CSRF.match(resp.text).groups()
         return order_url, coin_auth, csrf_name, csrf_value
 
     def taxes_and_fees(self, model, trim, price, order_url, coin_auth, csrf_name, csrf_value) -> Tuple[float, float]:
