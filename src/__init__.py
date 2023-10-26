@@ -2,7 +2,7 @@ from types import TracebackType
 from typing import Callable, List, Tuple, Optional, Type
 
 from src.incentives import federal_us, state_nj, state_ny
-from src.teslawatcher import TeslaWatcher
+from src.tesla_watcher import TeslaWatcher
 
 WSGI_START_RESPONSE_TYPEDEF = Callable[
     [str,

@@ -2,7 +2,7 @@ import sys
 from typing import Dict
 
 from src import WSGI_START_RESPONSE_TYPEDEF
-from src.teslawatcher import backoff_random, TeslaWatcher
+from src.tesla_watcher import backoff_random, TeslaWatcher
 
 
 def repeat(run_count=-1, interval_seconds=(60 * 60 * 3)):
@@ -12,7 +12,7 @@ def repeat(run_count=-1, interval_seconds=(60 * 60 * 3)):
             backoff_random(interval_seconds, interval_seconds)
         remaining -= 1
         try:
-            print(APP.run())
+            APP.run()
         except Exception as e:
             print(f"All attempts failed: Error={repr(e)}")
             backoff_random()
@@ -20,7 +20,7 @@ def repeat(run_count=-1, interval_seconds=(60 * 60 * 3)):
 
 def app(environ: Dict[str, str], start_response: WSGI_START_RESPONSE_TYPEDEF):
     status = "200 OK"
-    data = f"{APP.run()}"
+    data = f"Notifications Sent"
     response_headers = [
         ("Content-type", "text/plain"),
         ("Content-Length", str(len(data)))

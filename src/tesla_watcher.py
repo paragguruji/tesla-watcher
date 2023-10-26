@@ -2,62 +2,21 @@ import json
 import os
 import re
 import smtplib
-import ssl
-import time
 from datetime import datetime
-from random import randint
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import List, Any, Tuple
 
 import pytz
 import requests
-from geopy.extra.rate_limiter import RateLimiter
-from geopy.geocoders import Nominatim
-from timezonefinder import TimezoneFinder
 
 from src.incentives import INCENTIVES
+from src.utils import enrich_address, COMMON_HEADERS, CSRF_REGEX, backoff_random, \
+    parse_recipients, TeslaSummary, ResultPage, gcp_download_text, gcp_upload_text
 
-COMMON_HEADERS = {
-    "accept": "*/*",
-    "accept-language": "en-US,en;q=0.9,mr-IN;q=0.8,mr;q=0.7,hi-IN;q=0.6,hi;q=0.5",
-    "dnt": "1",
-    "sec-ch-ua": "\"Chromium\";v=\"116\", \"Not)A;Brand\";v=\"24\", \"Google Chrome\";v=\"116\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "macOS",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-origin",
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/116.0.0.0 Safari/537.36"
-}
-
-CSRF_REGEX = r""".*\"csrf_key\":\"(.*?)\",\"csrf_token\":\"(.*?)\".*"""
-
-
-
-def enrich_address(address_text):
-    geolocator = Nominatim(user_agent="tesla_watcher", timeout=20)
-    geocode = RateLimiter(
-        geolocator.geocode, min_delay_seconds=3.0, error_wait_seconds=3.0, swallow_exceptions=False, max_retries=10)
-    geolocation = geocode(address_text)
-    tf = TimezoneFinder()
-    timezone = tf.timezone_at(lng=geolocation.longitude, lat=geolocation.latitude)
-    return round(geolocation.latitude, 5), round(geolocation.longitude, 5), timezone
-
-
-def backoff_random(_min=3, _max=9):
-    time.sleep(randint(_min, _max))
-
-
-def make_banner(from_email: str, to_emails: List[str], subject: str, content: List[str]) -> str:
-    header = [f"From: <{from_email}>", "To: " + ",".join([f"<{r}>" for r in to_emails]), subject]
-    width = (10 + max(map(len, header + content)))
-    return ("\n".join(
-        ["+" + "=" * width + "+"] +
-        ["|" + line + (" " * (width - len(line))) + "|" for line in header] +
-        ["+" + "-" * width + "+"] +
-        ["|" + line + (" " * (width - len(line))) + "|" for line in content] +
-        ["+" + "=" * width + "+"]
-    ))
+GCP_BUCKET = "develop_pguruji_static_resources"
+GCP_PATH_MAILING_LIST = "tesla_watcher/mailing_list.txt"
+GCP_PATH_SEARCH_RESULT = "tesla_watcher/last_results.txt"
 
 
 class TeslaWatcher:
@@ -72,10 +31,11 @@ class TeslaWatcher:
             model: str,
             trim: str,
             referral_discount: float = 500.0,
-            top_results_count: int = 5,
+            top_results_count: int = 10,
             max_retry_attempts: int = 5,
             timeout_seconds: int = 60,
-            mailing_list_txt: str = "resources/mailing_list.txt",
+            mailing_list_path: str = f"{GCP_BUCKET}/{GCP_PATH_MAILING_LIST}",
+            last_results_path: str = f"{GCP_BUCKET}/{GCP_PATH_SEARCH_RESULT}",
             smtp_host: str = "smtp.gmail.com",
             smtp_user_email: str = os.environ.get("SMTP_USER_EMAIL", None),
             smtp_user_password: str = os.environ.get("SMTP_USER_PASSWORD", None)
@@ -104,10 +64,12 @@ class TeslaWatcher:
 
         # Notification
         self.smtp_host = smtp_host
-        self.smtp_recipients = [email_id.strip() for email_id in open(mailing_list_txt) if email_id.strip()]
-        self.smtp_user_email = smtp_user_email
-        self.smtp_user_password = smtp_user_password
-        self.can_notify = all(map(bool, [self.smtp_user_email, self.smtp_user_password, self.smtp_recipients]))
+        self.smtp_user = smtp_user_email
+        self.smtp_password = smtp_user_password
+        self.email_recipients, self.sms_recipients = parse_recipients(gcp_download_text(mailing_list_path).split("\n"))
+        self.need_email = all(map(bool, [self.smtp_user, self.smtp_password, self.email_recipients]))
+        self.need_sms = all(map(bool, [self.smtp_user, self.smtp_password, self.sms_recipients]))
+        self.last_results_path = last_results_path
 
     @property
     def tesla_browser_url(self):
@@ -200,30 +162,43 @@ class TeslaWatcher:
             "csrf_value": f"{csrf_value}"
         }
 
-    def notify(self, top_results: List[List[str]], total_results: int) -> str:
-        smtp_host = self.smtp_host
-        sender = str(self.smtp_user_email)
-        password = str(self.smtp_user_password)
-        recipients = self.smtp_recipients
-        can_notify = self.can_notify
-        browser_url = self.tesla_browser_url
+    def smtp_send(self, channel, recipients, subject_line, html_body):
+        try:
+            for recipient in recipients:
+                msg = MIMEMultipart()
+                msg['From'] = self.smtp_user
+                msg['To'] = recipient
+                msg['Subject'] = subject_line
+                msg.attach(MIMEText(html_body, 'html'))
+                with smtplib.SMTP(host=self.smtp_host, port=587) as server:
+                    server.starttls()
+                    server.login(self.smtp_user, self.smtp_password)
+                    server.sendmail(self.smtp_user, recipients, msg.as_string())
+        except Exception as e:
+            raise IOError(f"Error notifying results: Channel={channel}") from e
 
-        timestamp = datetime.now(pytz.utc).astimezone(pytz.timezone(self.timezone)).strftime("%Y-%m-%dT%H:%M:%S")
-        subject_line = f"Subject: Tesla @ [{timestamp}]"
-        content_lines = ([f"Top {len(top_results)}/{total_results} matches from {browser_url}:", ""] +
-                         [line for result in top_results for line in result])
-        banner = make_banner(sender, recipients, subject_line, content_lines)
-        email_message = "\n".join([subject_line] + content_lines)
-        if can_notify:
-            try:
-                with smtplib.SMTP_SSL(smtp_host, 465, context=ssl.create_default_context()) as server:
-                    server.login(sender, password)
-                    server.sendmail(sender, recipients, email_message.encode("utf-8"))
-            except Exception as e:
-                raise IOError(f"Error notifying results: Results={banner}") from e
-        else:
+    def notify(self, top_results: List[TeslaSummary], results: int) -> None:
+        timestamp = datetime.now(pytz.utc).astimezone(self.timezone).strftime("%b %d, %I %p").replace(" 0", " ")
+        results_page = ResultPage(timestamp=timestamp, total=results, link=self.tesla_browser_url, cars=top_results)
+        curr = results_page.plain_text.split("\n")
+        print(f"Search Results:\n{results_page.plain_text}")
+        # noinspection PyBroadException
+        try:
+            prev = gcp_download_text(self.last_results_path).split("\n")
+        except Exception as e:
+            print(f"Couldn't read last results: {e}")
+            prev = []
+        no_change = len(curr) == len(prev) and all([curr[i] == prev[i] for i in range(1, len(prev))])
+        if no_change:
+            print(f'INFO: No change as of {curr[0].split("@")[1].strip()} since {prev[0].split("@")[1].strip()}')
+        if not (self.need_email or self.need_sms):
             print("WARNING: missing email user, password, or recipients - Will not notify results")
-        return banner
+        if self.need_email:
+            subject = results_page.subject + (f' - No Change ({prev[0].split("@")[1]})' if no_change else "")
+            self.smtp_send("EMAIL", self.email_recipients, subject, results_page.html_email)
+        if self.need_sms and not no_change:
+            self.smtp_send("SMS", self.sms_recipients, results_page.subject, results_page.html_sms)
+        gcp_upload_text(path=self.last_results_path, content=results_page.plain_text)
 
     def order_identifiers(self, vin):
         url = self.tesla_order_url(vin=vin)
@@ -238,7 +213,7 @@ class TeslaWatcher:
             re.match(CSRF_REGEX, resp.text, flags=(re.UNICODE | re.MULTILINE | re.DOTALL)).groups())
         return order_url, coin_auth, csrf_name, csrf_value
 
-    def taxes_and_fees(self, model, trim, price, order_url, coin_auth, csrf_name, csrf_value):
+    def taxes_and_fees(self, model, trim, price, order_url, coin_auth, csrf_name, csrf_value) -> Tuple[float, float]:
         url = self.tesla_taxes_url
         headers = self.tesla_taxes_headers(referrer=order_url, coin_auth=coin_auth)
         timeout = self.timeout_seconds
@@ -248,59 +223,46 @@ class TeslaWatcher:
         resp = requests.post(url=url, headers=headers, timeout=timeout, json=params)
         if resp.status_code == 200:
             costs = json.loads(resp.content)
-            return sum(d["amount"] for d in costs["AUTO_CASH"]["fees"] + costs["AUTO_CASH"]["taxes"])
+            return (sum(float(d["amount"]) for d in costs["AUTO_CASH"]["taxes"]),
+                    sum(float(d["amount"]) for d in costs["AUTO_CASH"]["fees"]))
         else:
             raise IOError(f"Taxes and Fees calculator API failed: ResponseCode={resp.status_code}")
 
     def total_incentives(self, car):
-        country, state, county, city = self.country, self.state, self.county, self.city
-        return sum(
-            (v if v else 0.0) for v in [incentive(car, country, state, county, city) for incentive in INCENTIVES])
+        return sum((v if v else 0.0)
+                   for v in [inc(car, self.country, self.state, self.county, self.city) for inc in INCENTIVES])
 
-    def extract(self, page: dict[str, Any]) -> Tuple[List[List[str]], int]:
+    def extract(self, page: dict[str, Any]) -> Tuple[List[TeslaSummary], int]:
         total = page["total_matches_found"]
-        lines = []
+        top_cars = []
         for car in page["results"]:
-            odometer = float(car["Odometer"])
-            odometer_unit = car["OdometerType"]
-            miles = f"[{int(odometer)} {odometer_unit}]" if odometer >= 1.0 else ""
-            demo = "[Demo Vehicle]" if car["IsDemo"] else ""
-            model_code, trim_code = None, None
-            for code in car["OptionCodeData"]:
-                if code["group"] == "MODEL":
-                    model_code = code["code"]
-                if code["group"] == "TRIM":
-                    trim_code = code["code"]
-                if model_code is not None and trim_code is not None:
-                    break
-            else:
-                if model_code is None or trim_code is None:
-                    raise ValueError("Model and Trim info missing in search result")
             vin = car["VIN"]
-            selling_price = car["PurchasePrice"]
             order_url, coin_auth, csrf_name, csrf_value = self.order_identifiers(vin=vin)
-            total_taxes_and_fees = self.taxes_and_fees(
-                model=model_code,
-                trim=trim_code,
-                price=selling_price,
+            price = car["PurchasePrice"]
+            options = {code["group"]: code for code in car["OptionCodeData"]}
+            taxes, fees = self.taxes_and_fees(
+                model=options["MODEL"]["code"],
+                trim=options["TRIM"]["code"],
+                price=price,
                 order_url=order_url,
                 coin_auth=coin_auth,
                 csrf_name=csrf_name,
                 csrf_value=csrf_value
             )
-            payment = selling_price + total_taxes_and_fees
-            net_cost = payment - self.referral_discount - self.total_incentives(car)
-            result_lines = [
-                f"[${selling_price:,.2f} => ${payment:,.2f} => ${net_cost:,.2f}]{miles}{demo}",
-                f'  {car["Year"]} Tesla {car["TrimName"]}'
-            ]
-            for spec in car["OptionCodeSpecs"]["C_SPECS"]["options"]:
-                result_lines.append(f'  {spec["description"]}: {spec["name"]}')
-            for opt in car["OptionCodeSpecs"]["C_OPTS"]["options"]:
-                result_lines.append(f'  {opt["name"]}'.replace("’’", "''"))
-            result_lines.append(f"  Order: {order_url}")
-            lines.append(result_lines)
-        return lines, total
+            incentives = self.total_incentives(car)
+            top_cars.append(TeslaSummary(
+                year=car["Year"],
+                demo=("[DEMO]" if car["IsDemo"] else ""),
+                miles=(f'[{car["Odometer"]} {car["OdometerType"]}]' if car["Odometer"] else ""),
+                options=options,
+                price=price,
+                taxes=taxes,
+                fees=fees,
+                incentives=incentives,
+                referral=self.referral_discount,
+                order_url=order_url
+            ))
+        return top_cars, total
 
     def fetch(self):
         url = self.tesla_search_url
@@ -318,11 +280,12 @@ class TeslaWatcher:
 
     def run(self):
         attempt = 0
-        max_retry_attempts = self.max_retry_attempts
+        max_retry_attempts = 1  # self.max_retry_attempts
         while True:
             attempt += 1
             try:
-                return self.notify(*self.extract(self.fetch()))
+                self.notify(*self.extract(self.fetch()))
+                break
             except Exception as e:
                 if attempt < max_retry_attempts:
                     print(f"Failed Attempt #{attempt}: Error={repr(e)}")
